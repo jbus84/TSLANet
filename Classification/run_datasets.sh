@@ -29,3 +29,6 @@ do
   --depth 2 \
   --model_id other_datasets
 done
+
+
+poetry run  python -u Classification/TSLANet_classification.py --data_path /Users/danielfisher/repositories/TSLANet/data/epilepsy --emb_dim 256 --depth 2 --model_id epilepsy

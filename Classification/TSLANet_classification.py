@@ -11,8 +11,8 @@ import torch.nn as nn
 import torch.optim as optim
 
 from timm.loss import LabelSmoothingCrossEntropy
-from timm.models.layers import DropPath
-from timm.models.layers import trunc_normal_
+from timm.layers import DropPath
+from timm.layers import trunc_normal_
 from torchmetrics.classification import MulticlassF1Score
 
 from dataloader import get_datasets

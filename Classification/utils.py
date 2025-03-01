@@ -9,39 +9,46 @@ from einops import rearrange
 import numpy as np
 
 def get_clf_report(model, dataloader, save_dir, class_names):
-    # GET THE PERFORMANCE ON THE BEST EPOCH ...
+    device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
+    
+    # Move model to MPS
     model.eval()
-    model = model.cuda()
+    model.to(device)
+
     predictions = []
     targets = []
+
     with torch.no_grad():
         for batch in dataloader:
             try:
-                data = batch['samples'].type(torch.float).cuda()
-                labels = batch['labels'].to(torch.int64).cuda()
+                data = batch['samples'].float().to(device)
+                labels = batch['labels'].long().to(device)
             except:
                 data, labels = batch
-                data = data.type(torch.float).cuda() # rearrange(data, 'B L C -> B C L').type(torch.float).cuda()
-                labels = labels.squeeze().to(torch.int64).cuda()
+                data = data.float().to(device)
+                labels = labels.squeeze().long().to(device)
 
-            # to the model ...
+            # Forward pass
             logits = model(data)
-
             preds = torch.argmax(logits, dim=1)
+
+            # Move tensors back to CPU before converting to NumPy
             predictions.extend(preds.cpu().numpy())
             targets.extend(labels.cpu().numpy())
 
+    # Generate classification report
     clf_report = classification_report(targets, predictions, target_names=class_names,
                                        digits=4, output_dict=True)
     df = pd.DataFrame(clf_report)
     accuracy = accuracy_score(targets, predictions)
-    df["accuracy"] = accuracy
-    df = df * 100
+    df["accuracy"] = accuracy * 100  # Convert to percentage
 
-    # save classification report
+    # Save classification report
     file_name = f"Best_classification_report_{datetime.datetime.now().strftime('%H_%M')}.xlsx"
     report_Save_path = os.path.join(save_dir, file_name)
-    df.to_excel(report_Save_path)
+    df.to_json(report_Save_path)
+
+    print(f"Classification report saved to: {report_Save_path}")
 
 def save_copy_of_files(checkpoint_callback):
     # Get the frame of the caller of this function

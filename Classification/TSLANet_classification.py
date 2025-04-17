@@ -1,22 +1,48 @@
 import argparse
 import datetime
 import os
+from typing import Any
 
 import lightning as L
 from lightning.pytorch.callbacks import LearningRateMonitor, ModelCheckpoint, TQDMProgressBar
+
+from streaming import StreamingDataset
 
 import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
+from torch.utils.data import DataLoader
 
 from timm.loss import LabelSmoothingCrossEntropy
 from timm.layers import DropPath
 from timm.layers import trunc_normal_
 from torchmetrics.classification import MulticlassF1Score
 
-from dataloader import get_datasets
+from dataloader import get_datasets, get_tick_datasets
 from utils import get_clf_report, save_copy_of_files, str2bool, random_masking_3D
+
+
+
+class LOBDataset(StreamingDataset):
+    def __init__(self,
+                 local: str,
+                 shuffle: bool,
+                 batch_size: int,
+                ) -> None:
+        super().__init__(
+                         local=local, 
+                         shuffle=shuffle, 
+                         batch_size=batch_size, 
+                         validate_hash=None)
+
+    def __getitem__(self, idx:int) -> Any:
+        obj = super().__getitem__(idx)
+        x = obj['array'].copy()
+        y = obj['class']
+        return x, y
+        
+
 
 
 class ICB(L.LightningModule):
@@ -84,7 +110,7 @@ class Adaptive_Spectral_Block(nn.Module):
         epsilon = 1e-6  # Small constant to avoid division by zero
         normalized_energy = energy / (median_energy + epsilon)
 
-        adaptive_mask = ((normalized_energy > self.threshold_param).float() - self.threshold_param).detach() + self.threshold_param
+        adaptive_mask = ((normalized_energy > self.threshold_param).to(torch.float32) - self.threshold_param).detach() + self.threshold_param
         adaptive_mask = adaptive_mask.unsqueeze(-1)
 
         return adaptive_mask
@@ -264,7 +290,7 @@ class model_training(L.LightningModule):
 
         preds = self.model.forward(data)
         loss = self.criterion(preds, labels)
-        acc = (preds.argmax(dim=-1) == labels).float().mean()
+        acc = (preds.argmax(dim=-1) == labels).to(torch.float32).mean()
         f1 = self.f1(preds, labels)
 
         # Logging for both step and epoch
@@ -315,7 +341,7 @@ def train_model(pretrained_model_path):
         accelerator="auto",
         devices=1,
         num_sanity_val_steps=0,
-        max_epochs=MAX_EPOCHS,
+        max_epochs=args.num_epochs,
         callbacks=[
             checkpoint_callback,
             LearningRateMonitor("epoch"),
@@ -350,23 +376,23 @@ def train_model(pretrained_model_path):
 
 if __name__ == '__main__':
 
+
     parser = argparse.ArgumentParser()
-    parser.add_argument('--model_id', type=str, default='TEST')
-    parser.add_argument('--data_path', type=str, default=r'data/hhar')
+    parser.add_argument('--model_id', type=str, default='AUDUSD')
 
     # Training parameters:
     parser.add_argument('--num_epochs', type=int, default=100)
     parser.add_argument('--pretrain_epochs', type=int, default=50)
     parser.add_argument('--batch_size', type=int, default=16)
-    parser.add_argument('--train_lr', type=float, default=1e-3)
-    parser.add_argument('--pretrain_lr', type=float, default=1e-3)
+    parser.add_argument('--train_lr', type=float, default=1e-4)
+    parser.add_argument('--pretrain_lr', type=float, default=1e-4)
 
     # Model parameters:
-    parser.add_argument('--emb_dim', type=int, default=128)
-    parser.add_argument('--depth', type=int, default=2)
+    parser.add_argument('--emb_dim', type=int, default=64)
+    parser.add_argument('--depth', type=int, default=1)
     parser.add_argument('--masking_ratio', type=float, default=0.4)
     parser.add_argument('--dropout_rate', type=float, default=0.15)
-    parser.add_argument('--patch_size', type=int, default=8)
+    parser.add_argument('--patch_size', type=int, default=16)
 
     # TSLANet components:
     parser.add_argument('--load_from_pretrained', type=str2bool, default=True, help='False: without pretraining')
@@ -375,12 +401,9 @@ if __name__ == '__main__':
     parser.add_argument('--adaptive_filter', type=str2bool, default=True)
 
     args = parser.parse_args()
-    DATASET_PATH = args.data_path
-    MAX_EPOCHS = args.num_epochs
-    print(DATASET_PATH)
 
     # load from checkpoint
-    run_description = f"{os.path.basename(args.data_path)}_dim{args.emb_dim}_depth{args.depth}___"
+    run_description = f"AUDUSD_dim{args.emb_dim}_depth{args.depth}___"
     run_description += f"ASB_{args.ASB}__AF_{args.adaptive_filter}__ICB_{args.ICB}__preTr_{args.load_from_pretrained}_"
     run_description += f"{datetime.datetime.now().strftime('%H_%M_%S')}"
     print(f"========== {run_description} ===========")
@@ -408,15 +431,20 @@ if __name__ == '__main__':
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
 
-    # load datasets ...
-    train_loader, val_loader, test_loader = get_datasets(DATASET_PATH, args)
-    print("Dataset loaded ...")
+    DATAPATH = "/Users/danielfisher/repositories/futfut/mosaic_dataset"
+    train_ds = LOBDataset(local=f"{DATAPATH}/train", batch_size=args.batch_size, shuffle=True)
+    val_ds = LOBDataset(local=f"{DATAPATH}/val", batch_size=args.batch_size, shuffle=False)
+    test_ds = LOBDataset(local=f"{DATAPATH}/test", batch_size=args.batch_size, shuffle=False)
+
+    train_loader = DataLoader(train_ds,batch_size=args.batch_size, num_workers=2)
+    val_loader = DataLoader(val_ds,batch_size=args.batch_size, num_workers=2)
+    test_loader = DataLoader(test_ds,batch_size=args.batch_size, num_workers=2)
 
     # Get dataset characteristics ...
-    args.num_classes = len(np.unique(train_loader.dataset.y_data))
-    args.class_names = [str(i) for i in range(args.num_classes)]
-    args.seq_len = train_loader.dataset.x_data.shape[-1]
-    args.num_channels = train_loader.dataset.x_data.shape[1]
+    args.num_classes = 5
+    args.class_names = [1,2,3,4,5]
+    args.seq_len = 600
+    args.num_channels = 42
 
     if args.load_from_pretrained:
         best_model_path = pretrain_model()

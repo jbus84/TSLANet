@@ -2,6 +2,10 @@ import argparse
 import datetime
 import os
 
+from typing import Any
+
+from streaming import StreamingDataset
+
 import lightning as L
 import pandas as pd
 import torch
@@ -15,6 +19,25 @@ from torchmetrics.regression import MeanSquaredError, MeanAbsoluteError
 
 from data_factory import data_provider
 from utils import save_copy_of_files, random_masking_3D, str2bool
+
+
+class LOBDataset(StreamingDataset):
+    def __init__(self,
+                 local: str,
+                 shuffle: bool,
+                 batch_size: int,
+                ) -> None:
+        super().__init__(
+                         local=local, 
+                         shuffle=shuffle, 
+                         batch_size=batch_size, 
+                         validate_hash=None)
+
+    def __getitem__(self, idx:int) -> Any:
+        obj = super().__getitem__(idx)
+        x = obj['array'].copy()
+        y = obj['value']
+        return x, y
 
 
 class ICB(L.LightningModule):
@@ -200,7 +223,18 @@ class model_pretraining(L.LightningModule):
 
     def configure_optimizers(self):
         optimizer = optim.AdamW(self.model.parameters(), lr=1e-4, weight_decay=1e-6)
-        return optimizer
+        # Example: Cosine annealing scheduler
+        scheduler = {
+            'scheduler': torch.optim.lr_scheduler.CosineAnnealingLR(
+                optimizer, 
+                T_max=args.pretrain_epochs * (TRAIN_DS_SIZE // args.batch_size), 
+                eta_min=1e-6  # Minimum LR
+            ),
+            'interval': 'step',  # Update every epoch
+            'name': 'lr_scheduler'
+        }
+        return [optimizer], [scheduler]
+
 
     def _calculate_loss(self, batch, mode="train"):
         batch_x, batch_y, _, _ = batch
@@ -244,17 +278,21 @@ class model_training(L.LightningModule):
 
     def configure_optimizers(self):
         optimizer = optim.AdamW(self.model.parameters(), lr=1e-4, weight_decay=1e-6)
+        # Example: Cosine annealing scheduler
         scheduler = {
-            'scheduler': optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.1, patience=2,
-                                                              verbose=True),
-            'monitor': 'val_mse',
-            'interval': 'epoch',
-            'frequency': 1
+            'scheduler': torch.optim.lr_scheduler.CosineAnnealingLR(
+                optimizer, 
+                T_max=args.pretrain_epochs * (TRAIN_DS_SIZE // args.batch_size), 
+                eta_min=1e-6  # Minimum LR
+            ),
+            'interval': 'step',  # Update every epoch
+            'name': 'lr_scheduler'
         }
-        return {'optimizer': optimizer, 'lr_scheduler': scheduler}
+        return [optimizer], [scheduler]
+
 
     def _calculate_loss(self, batch, mode="train"):
-        batch_x, batch_y, _, _ = batch
+        batch_x, batch_y = batch
         batch_x = batch_x.float().to(device)
         batch_y = batch_y.float().to(device)
 

@@ -1,0 +1,3 @@
+AUDUSD_CLF_dim64_depth2_ASB_True_AF_True_ICB_True_preTr_False_patch_16_20250421_091505  
+acc:{'test': 0.5445587038993835, 'val': 0.5304408073425293}, mf1:{'test': 0.5066365599632263, 'val': 0.502023458480835}
+

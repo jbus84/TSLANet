@@ -8,7 +8,7 @@ import inspect
 from einops import rearrange
 import numpy as np
 
-def get_clf_report(model, dataloader, save_dir, class_names):
+def get_clf_report(model, dataloader, save_dir):
     device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
     
     # Move model to MPS
@@ -22,11 +22,13 @@ def get_clf_report(model, dataloader, save_dir, class_names):
         for batch in dataloader:
             try:
                 data = batch['samples'].float().to(device)
-                labels = batch['labels'].long().to(device)
+                labels = batch['labels']
+                labels = labels.long().to(device)
             except:
                 data, labels = batch
                 data = data.float().to(device)
-                labels = labels.squeeze().long().to(device)
+                labels = labels.squeeze()
+                labels = labels.long().to(device)
 
             # Forward pass
             logits = model(data)
@@ -37,7 +39,7 @@ def get_clf_report(model, dataloader, save_dir, class_names):
             targets.extend(labels.cpu().numpy())
 
     # Generate classification report
-    clf_report = classification_report(targets, predictions, target_names=class_names,
+    clf_report = classification_report(targets, predictions,
                                        digits=4, output_dict=True)
     df = pd.DataFrame(clf_report)
     accuracy = accuracy_score(targets, predictions)

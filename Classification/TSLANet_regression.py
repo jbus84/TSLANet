@@ -5,6 +5,8 @@ from typing import Any
 
 import lightning as L
 from lightning.pytorch.callbacks import LearningRateMonitor, ModelCheckpoint, TQDMProgressBar
+from sklearn.metrics import r2_score as sk_r2
+
 
 # import webdataset as wds
 # from pathlib import Path
@@ -17,10 +19,11 @@ import torch.optim as optim
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
 
-from timm.loss import LabelSmoothingCrossEntropy, AsymmetricLossMultiLabel
+from timm.loss import LabelSmoothingCrossEntropy
 from timm.layers import DropPath
 from timm.layers import trunc_normal_
-from torchmetrics.classification import MulticlassF1Score
+from torchmetrics.regression import R2Score
+
 
 from utils import get_clf_report, save_copy_of_files, str2bool, random_masking_3D
 
@@ -41,51 +44,8 @@ class LOBDataset(StreamingDataset):
     def __getitem__(self, idx:int) -> Any:
         obj = super().__getitem__(idx)
         x = obj['array'].copy()
-        y = obj['class']
+        y = obj['value'].astype(np.float32)
         return x, y
-
-
-# def get_dataloader(data_pattern, target_type="cls", batch_size=32, shuffle_size=1000, num_workers=4, is_train=False):
-#     """
-#     Create a WebDataset dataloader for sharded tar.gz files.
-    
-#     :
-#         data_pattern: Path pattern for shards (e.g., "/path/to/data/train-{000000..000999}.tar.gz")
-#         target_type: "cls" or "reg"
-#         batch_size: Batch size
-#         shuffle_size: Shuffle buffer size (training only)
-#         num_workers: Number of workers
-#         is_train: Whether to enable shuffling
-#     """
-#     assert target_type in ["cls", "reg"], "target_type must be 'cls' or 'reg'"
-    
-#     # Verify files exist
-#     if not any(Path(data_pattern.split("{")[0]).parent.glob(Path(data_pattern).name.split("{")[0] + "*")):
-#         raise FileNotFoundError(f"No files found matching pattern: {data_pattern}")
-    
-#     # Build pipeline
-#     dataset = (
-#         wds.WebDataset(data_pattern)
-#         .decode()
-#         .to_tuple(f"input.npy", f"target.{target_type}", "metadata.json")
-#     )
-    
-#     # Add shuffling for training
-#     if is_train:
-#         dataset = dataset.shuffle(shuffle_size)
-    
-#     # Add batching
-#     dataset = dataset.batched(batch_size, partial=False)
-    
-#     return torch.utils.data.DataLoader(
-#         dataset,
-#         batch_size=batch_size,
-#         num_workers=num_workers,
-#         pin_memory=True,
-#         persistent_workers=True,
-#     )
-        
-
 
 
 class ICB(L.LightningModule):
@@ -334,8 +294,9 @@ class model_training(L.LightningModule):
         super().__init__()
         self.save_hyperparameters()
         self.model = TSLANet()
-        self.f1 = MulticlassF1Score(num_classes=args.num_classes)
-        self.criterion = LabelSmoothingCrossEntropy()
+        self.criterion = F.mse_loss
+        self.mae = F.l1_loss
+        self.r2 = R2Score()
 
     def forward(self, x):
         return self.model(x)
@@ -357,17 +318,17 @@ class model_training(L.LightningModule):
 
     def _calculate_loss(self, batch, mode="train"):
         data = batch[0]
-        labels = batch[1].to(torch.int64)
+        labels = batch[1]
 
-        preds = self.model.forward(data)
+        preds = self.model.forward(data).squeeze()
         loss = self.criterion(preds, labels)
-        acc = (preds.argmax(dim=-1) == labels).to(torch.float32).mean()
-        f1 = self.f1(preds, labels)
+        mae = self.mae(preds, labels)
+        r2 = self.r2(preds, labels)
 
         # Logging for both step and epoch
         self.log(f"{mode}_loss", loss, on_step=False, on_epoch=True, prog_bar=True, logger=True)
-        self.log(f"{mode}_acc", acc, on_step=False, on_epoch=True, prog_bar=True, logger=True)
-        self.log(f"{mode}_f1", f1, on_step=False, on_epoch=True, prog_bar=True, logger=True)
+        self.log(f"{mode}_mae", mae, on_step=False, on_epoch=True, prog_bar=True, logger=True)
+        self.log(f"{mode}_r2", r2, on_step=False, on_epoch=True, prog_bar=True, logger=True)
         return loss
 
     def training_step(self, batch, batch_idx):
@@ -440,12 +401,13 @@ def train_model(pretrained_model_path=None, resume_checkpoint_path=None):
     val_result = trainer.test(model, dataloaders=val_loader, verbose=False)
     test_result = trainer.test(model, dataloaders=test_loader, verbose=False)
 
-    acc_result = {"test": test_result[0]["test_acc"], "val": val_result[0]["test_acc"]}
-    f1_result = {"test": test_result[0]["test_f1"], "val": val_result[0]["test_f1"]}
+    # acc_result = {"test": test_result[0]["test_acc"], "val": val_result[0]["test_acc"]}
+    # f1_result = {"test": test_result[0]["test_f1"], "val": val_result[0]["test_f1"]}
 
-    get_clf_report(model, test_loader, TRAIN_CHECKPOINT_PATH)
+    # get_clf_report(model, test_loader, TRAIN_CHECKPOINT_PATH)
 
-    return model, acc_result, f1_result
+    # return model, acc_result, f1_result
+    return model, _, _
 
 
 if __name__ == '__main__':
@@ -469,17 +431,18 @@ if __name__ == '__main__':
     parser.add_argument('--patch_size', type=int, default=64)
 
     # TSLANet components:
-    parser.add_argument('--load_from_pretrained', type=str2bool, default=True, help='False: without pretraining')
+    parser.add_argument('--load_from_pretrained', type=str2bool, default=False, help='False: without pretraining')
     parser.add_argument('--ICB', type=str2bool, default=True)
     parser.add_argument('--ASB', type=str2bool, default=True)
     parser.add_argument('--adaptive_filter', type=str2bool, default=True)
 
     parser.add_argument("--resume_checkpoint", type=str2bool, default=False)
+
     args = parser.parse_args()
 
     # load from checkpoint
     if not args.resume_checkpoint:
-        run_description = f"AUDUSD_CLF_dim{args.emb_dim}_depth{args.depth}_"
+        run_description = f"AUDUSD_REG_dim{args.emb_dim}_depth{args.depth}_"
         run_description += f"ASB_{args.ASB}_AF_{args.adaptive_filter}_ICB_{args.ICB}_preTr_{args.load_from_pretrained}_patch_{args.patch_size}_"
         run_description += f"{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}"
         run_description_train = run_description + "_train"
@@ -558,8 +521,8 @@ if __name__ == '__main__':
     # )
 
     # Get dataset characteristics ...
-    args.num_classes = 5
-    args.seq_len = 500
+    args.num_classes = 1
+    args.seq_len = 600
     args.num_channels = 42
 
     if args.load_from_pretrained:

@@ -517,6 +517,25 @@ files = [
 ]
 
 [[package]]
+name = "cbloss"
+version = "0.2.0"
+description = "PyTorch implementations of two popular loss functions for imbalanced classification problems: Class Balanced Loss and Focal Loss."
+optional = false
+python-versions = ">=3.7"
+files = [
+    {file = "cbloss-0.2.0-py3-none-any.whl", hash = "sha256:d63353acfa019a6cfa7f3f6ddec7b250b36277463191b640caa9ed63cfd114dc"},
+    {file = "cbloss-0.2.0.tar.gz", hash = "sha256:0bf2aa160a9e7104eb9bc1a0f1fca334a743cb4d85e269840375a0d58df31440"},
+]
+
+[package.dependencies]
+numpy = "*"
+torch = "*"
+
+[package.extras]
+dev = ["black (==21.7b0)", "click (==8.0.4)", "flake8 (==3.9.2)", "importlib-metadata (>=1.1.0,<4.3)", "isort (==5.9.2)"]
+tests = ["black (==21.7b0)", "click (==8.0.4)", "flake8 (==3.9.2)", "importlib-metadata (>=1.1.0,<4.3)", "isort (==5.9.2)"]
+
+[[package]]
 name = "certifi"
 version = "2025.1.31"
 description = "Python package for providing Mozilla's CA Bundle."
@@ -4235,4 +4254,4 @@ files = [
 [metadata]
 lock-version = "2.0"
 python-versions = "3.10.14"
-content-hash = "a4958f3dc16f6fd6bb33d956113ed6ecb2c565e2d5073f536139e266378832d8"
+content-hash = "78ff6c0c39825a5790aa08cd73c934bdcfadaf5f90b1b8b0b004c692fd725114"

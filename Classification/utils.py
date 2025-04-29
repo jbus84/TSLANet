@@ -1,4 +1,4 @@
-from sklearn.metrics import classification_report, accuracy_score
+from sklearn.metrics import classification_report, accuracy_score, confusion_matrix
 import pandas as pd
 import datetime
 import torch
@@ -45,12 +45,16 @@ def get_clf_report(model, dataloader, save_dir):
     accuracy = accuracy_score(targets, predictions)
     df["accuracy"] = accuracy * 100  # Convert to percentage
 
+    conf_matrix = confusion_matrix(targets, predictions)
+
     # Save classification report
     file_name = f"Best_classification_report_{datetime.datetime.now().strftime('%H_%M')}.xlsx"
     report_Save_path = os.path.join(save_dir, file_name)
     df.to_json(report_Save_path)
 
     print(f"Classification report saved to: {report_Save_path}")
+
+    return conf_matrix
 
 def save_copy_of_files(checkpoint_callback):
     # Get the frame of the caller of this function

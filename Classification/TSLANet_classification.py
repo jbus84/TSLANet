@@ -443,9 +443,9 @@ def train_model(pretrained_model_path=None, resume_checkpoint_path=None):
     acc_result = {"test": test_result[0]["test_acc"], "val": val_result[0]["test_acc"]}
     f1_result = {"test": test_result[0]["test_f1"], "val": val_result[0]["test_f1"]}
 
-    get_clf_report(model, test_loader, TRAIN_CHECKPOINT_PATH)
+    conf_matrix = get_clf_report(model, test_loader, TRAIN_CHECKPOINT_PATH)
 
-    return model, acc_result, f1_result
+    return model, acc_result, f1_result, conf_matrix
 
 
 if __name__ == '__main__':
@@ -457,16 +457,18 @@ if __name__ == '__main__':
     # Training parameters:
     parser.add_argument('--num_epochs', type=int, default=100)
     parser.add_argument('--pretrain_epochs', type=int, default=100)
-    parser.add_argument('--batch_size', type=int, default=64)
+    parser.add_argument('--batch_size', type=int, default=128)
     parser.add_argument('--train_lr', type=float, default=1e-4)
     parser.add_argument('--pretrain_lr', type=float, default=1e-4)
 
     # Model parameters:
-    parser.add_argument('--emb_dim', type=int, default=64)
-    parser.add_argument('--depth', type=int, default=3)
+    parser.add_argument('--emb_dim', type=int, default=32)
+    parser.add_argument('--depth', type=int, default=5)
     parser.add_argument('--masking_ratio', type=float, default=0.4)
     parser.add_argument('--dropout_rate', type=float, default=0.5)
-    parser.add_argument('--patch_size', type=int, default=64)
+    parser.add_argument('--patch_size', type=int, default=8
+    
+    )
 
     # TSLANet components:
     parser.add_argument('--load_from_pretrained', type=str2bool, default=True, help='False: without pretraining')
@@ -480,7 +482,7 @@ if __name__ == '__main__':
     # load from checkpoint
     if not args.resume_checkpoint:
         run_description = f"AUDUSD_CLF_dim{args.emb_dim}_depth{args.depth}_"
-        run_description += f"ASB_{args.ASB}_AF_{args.adaptive_filter}_ICB_{args.ICB}_preTr_{args.load_from_pretrained}_patch_{args.patch_size}_"
+        run_description += f"ASB_{args.ASB}_AF_{args.adaptive_filter}_ICB_{args.ICB}_preTr_{args.load_from_pretrained}_patch_{args.patch_size}_batch_{args.batch_size}_"
         run_description += f"{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}"
         run_description_train = run_description + "_train"
         run_description_pretrain = run_description + "_pre_train"
@@ -518,7 +520,8 @@ if __name__ == '__main__':
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
 
-    DATAPATH = "/Users/danielfisher/repositories/futfut/mosaic_dataset"
+    NUM_CLASSES = 9
+    DATAPATH = f"/Users/danielfisher/repositories/futfut/mosaic_dataset_forward5000_backward5000_{NUM_CLASSES}bins"
     train_ds = LOBDataset(local=f"{DATAPATH}/train", batch_size=args.batch_size, shuffle=True)
     val_ds = LOBDataset(local=f"{DATAPATH}/val", batch_size=args.batch_size, shuffle=False)
     test_ds = LOBDataset(local=f"{DATAPATH}/test", batch_size=args.batch_size, shuffle=False)
@@ -530,53 +533,30 @@ if __name__ == '__main__':
     test_loader = DataLoader(test_ds,batch_size=args.batch_size, num_workers=1, persistent_workers=True, pin_memory=True)
 
 
-    # # For sharded training data (000001..000100)
-    # DATAPATH = "/Users/danielfisher/repositories/futfut/webdataset"
-    # train_loader = get_dataloader(
-    #     f"{DATAPATH}/train-{{000001..000011}}.tar",
-    #     target_type="cls",
-    #     is_train=True,
-    #     batch_size=args.batch_size,
-    # )
-    
-    # # For sharded validation data
-    # val_loader = get_dataloader(
-    #     f"{DATAPATH}/val-{{000001..000003}}.tar",
-    #     target_type="cls",
-    #     is_train=False,
-    #     batch_size=args.batch_size,
-    #     num_workers=1
-    # )
-
-    # # For sharded validation data
-    # test_loader = get_dataloader(
-    #     f"{DATAPATH}/test-{{000001..000002}}.tar",
-    #     target_type="cls",
-    #     is_train=False,
-    #     batch_size=args.batch_size,
-    #     num_workers=1,
-    # )
 
     # Get dataset characteristics ...
-    args.num_classes = 5
+    args.num_classes = NUM_CLASSES
     args.seq_len = 500
-    args.num_channels = 42
+    args.num_channels = 402
 
     if args.load_from_pretrained:
         best_model_path = pretrain_model(resume_checkpoint_path=pretrain_model_path, loss_type="mse")
     else:
         best_model_path = ''
 
-    model, acc_results, f1_results = train_model(best_model_path, resume_checkpoint_path=train_model_path)
+    model, acc_results, f1_results, conf_matrix = train_model(best_model_path, resume_checkpoint_path=train_model_path)
     print("ACC results", acc_results)
     print("F1  results", f1_results)
+    print("Conf matrix", conf_matrix)
 
     # append result to a text file...
     text_save_dir = "textFiles"
     os.makedirs(text_save_dir, exist_ok=True)
     f = open(f"{text_save_dir}/{args.model_id}.txt", 'a')
     f.write(run_description + "  \n")
-    f.write('acc:{}, mf1:{}'.format(acc_results, f1_results))
-    f.write('\n')
+    f.write(f"Num Classes {NUM_CLASSES}" + "  \n")
+    f.write('acc:{}, mf1:{}'.format(acc_results, f1_results) + "  \n")
+    f.write("conf mat:{}".format(conf_matrix) + "  \n")
+    f.write("conf mat normed:{}".format(np.round(conf_matrix / np.sum(conf_matrix), 2)) + "  \n")
     f.write('\n')
     f.close()

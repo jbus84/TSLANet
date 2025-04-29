@@ -28,6 +28,7 @@ from torchmetrics.regression import R2Score
 from utils import get_clf_report, save_copy_of_files, str2bool, random_masking_3D
 
 
+TARGET = "high_mid_reg"
 
 class LOBDataset(StreamingDataset):
     def __init__(self,
@@ -44,7 +45,7 @@ class LOBDataset(StreamingDataset):
     def __getitem__(self, idx:int) -> Any:
         obj = super().__getitem__(idx)
         x = obj['array'].copy()
-        y = obj['value'].astype(np.float32)
+        y = obj[TARGET].astype(np.float32)
         return x, y
 
 
@@ -194,7 +195,7 @@ class TSLANet(L.LightningModule):
         )
 
         # Classifier head
-        self.head = nn.Linear(args.emb_dim, args.num_classes)
+        self.head = nn.Linear(args.emb_dim, 1)
 
         # init weights
         trunc_normal_(self.pos_embed, std=.02)
@@ -323,7 +324,10 @@ class model_training(L.LightningModule):
         preds = self.model.forward(data).squeeze()
         loss = self.criterion(preds, labels)
         mae = self.mae(preds, labels)
-        r2 = self.r2(preds, labels)
+        r2 = self.r2(preds / 0.0001, labels / 0.0001)
+        # SS_res = ((labels - preds) ** 2).sum()
+        # SS_tot = ((labels - labels.mean()) ** 2).sum()
+        # print("SS_res:", SS_res.item(), "SS_tot:", SS_tot.item())
 
         # Logging for both step and epoch
         self.log(f"{mode}_loss", loss, on_step=False, on_epoch=True, prog_bar=True, logger=True)
@@ -401,13 +405,12 @@ def train_model(pretrained_model_path=None, resume_checkpoint_path=None):
     val_result = trainer.test(model, dataloaders=val_loader, verbose=False)
     test_result = trainer.test(model, dataloaders=test_loader, verbose=False)
 
-    # acc_result = {"test": test_result[0]["test_acc"], "val": val_result[0]["test_acc"]}
-    # f1_result = {"test": test_result[0]["test_f1"], "val": val_result[0]["test_f1"]}
-
-    # get_clf_report(model, test_loader, TRAIN_CHECKPOINT_PATH)
+    l1_result = {"test": test_result[0]["test_mae"], "val": val_result[0]["val_mae"]}
+    mse_result = {"test": test_result[0]["test_loss"], "val": val_result[0]["val_loss"]}
+    r2_result = {"test": test_result[0]["test_r2"], "val": val_result[0]["val_r2"]}
 
     # return model, acc_result, f1_result
-    return model, _, _
+    return model, l1_result, mse_result, r2_result
 
 
 if __name__ == '__main__':
@@ -425,10 +428,10 @@ if __name__ == '__main__':
 
     # Model parameters:
     parser.add_argument('--emb_dim', type=int, default=64)
-    parser.add_argument('--depth', type=int, default=3)
+    parser.add_argument('--depth', type=int, default=2)
     parser.add_argument('--masking_ratio', type=float, default=0.4)
-    parser.add_argument('--dropout_rate', type=float, default=0.5)
-    parser.add_argument('--patch_size', type=int, default=64)
+    parser.add_argument('--dropout_rate', type=float, default=0.25)
+    parser.add_argument('--patch_size', type=int, default=16)
 
     # TSLANet components:
     parser.add_argument('--load_from_pretrained', type=str2bool, default=False, help='False: without pretraining')
@@ -442,7 +445,7 @@ if __name__ == '__main__':
 
     # load from checkpoint
     if not args.resume_checkpoint:
-        run_description = f"AUDUSD_REG_dim{args.emb_dim}_depth{args.depth}_"
+        run_description = f"AUDUSD_REG_{TARGET}_dim{args.emb_dim}_depth{args.depth}_"
         run_description += f"ASB_{args.ASB}_AF_{args.adaptive_filter}_ICB_{args.ICB}_preTr_{args.load_from_pretrained}_patch_{args.patch_size}_"
         run_description += f"{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}"
         run_description_train = run_description + "_train"
@@ -481,7 +484,7 @@ if __name__ == '__main__':
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
 
-    DATAPATH = "/Users/danielfisher/repositories/futfut/mosaic_dataset"
+    DATAPATH = "/Users/danielfisher/repositories/futfut/mosaic_dataset_500_5bins"
     train_ds = LOBDataset(local=f"{DATAPATH}/train", batch_size=args.batch_size, shuffle=True)
     val_ds = LOBDataset(local=f"{DATAPATH}/val", batch_size=args.batch_size, shuffle=False)
     test_ds = LOBDataset(local=f"{DATAPATH}/test", batch_size=args.batch_size, shuffle=False)
@@ -493,36 +496,8 @@ if __name__ == '__main__':
     test_loader = DataLoader(test_ds,batch_size=args.batch_size, num_workers=1, persistent_workers=True, pin_memory=True)
 
 
-    # # For sharded training data (000001..000100)
-    # DATAPATH = "/Users/danielfisher/repositories/futfut/webdataset"
-    # train_loader = get_dataloader(
-    #     f"{DATAPATH}/train-{{000001..000011}}.tar",
-    #     target_type="cls",
-    #     is_train=True,
-    #     batch_size=args.batch_size,
-    # )
-    
-    # # For sharded validation data
-    # val_loader = get_dataloader(
-    #     f"{DATAPATH}/val-{{000001..000003}}.tar",
-    #     target_type="cls",
-    #     is_train=False,
-    #     batch_size=args.batch_size,
-    #     num_workers=1
-    # )
-
-    # # For sharded validation data
-    # test_loader = get_dataloader(
-    #     f"{DATAPATH}/test-{{000001..000002}}.tar",
-    #     target_type="cls",
-    #     is_train=False,
-    #     batch_size=args.batch_size,
-    #     num_workers=1,
-    # )
-
     # Get dataset characteristics ...
-    args.num_classes = 1
-    args.seq_len = 600
+    args.seq_len = 500
     args.num_channels = 42
 
     if args.load_from_pretrained:
@@ -530,16 +505,18 @@ if __name__ == '__main__':
     else:
         best_model_path = ''
 
-    model, acc_results, f1_results = train_model(best_model_path, resume_checkpoint_path=train_model_path)
-    print("ACC results", acc_results)
-    print("F1  results", f1_results)
+    model, l1_result, mse_result, r2_result = train_model(best_model_path, resume_checkpoint_path=train_model_path)
+    print("L1 results", l1_result)
+    print("MSE  results", mse_result)
+    print("R2  results", r2_result)
 
     # append result to a text file...
     text_save_dir = "textFiles"
     os.makedirs(text_save_dir, exist_ok=True)
     f = open(f"{text_save_dir}/{args.model_id}.txt", 'a')
+    f.write(f"Target: {TARGET}")
     f.write(run_description + "  \n")
-    f.write('acc:{}, mf1:{}'.format(acc_results, f1_results))
+    f.write('l1:{}, mse:{}, "r2:{}'.format(l1_result, mse_result, r2_result))
     f.write('\n')
     f.write('\n')
     f.close()
